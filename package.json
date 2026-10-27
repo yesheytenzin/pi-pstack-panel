@@ -1,0 +1,21 @@
+{
+  "name": "pi-pstack-panel",
+  "version": "0.1.0",
+  "description": "An in-terminal agent viewer for p-stack in Pi",
+  "type": "module",
+  "keywords": ["pi-package", "pstack", "subagents"],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/yesheytenzin/pi-pstack-panel.git"
+  },
+  "scripts": {
+    "test": "bun self-check.ts"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*"
+  },
+  "pi": {
+    "extensions": ["./index.ts"]
+  }
+}
