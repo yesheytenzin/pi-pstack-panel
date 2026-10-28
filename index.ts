@@ -257,7 +257,7 @@ export default function pstackPanel(pi: ExtensionAPI): void {
             for (const line of output.slice(start, end)) lines.push(` ${line}`);
             const position = maxScroll
               ? ` Rows ${start + 1}-${end}/${output.length}${viewport.kind === "paused" ? " · paused" : ""}`
-              : " Fits view · o expands tools";
+              : ` Fits view · o ${expandedTools ? "collapses" : "expands"} tools`;
             lines.push(theme.fg("dim", position), ...detailHelp);
           }
           return lines.slice(0, height).map((line) => truncateToWidth(line, width, "", true))
