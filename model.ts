@@ -10,9 +10,13 @@ export type AgentRecord =
   | { agent: AgentIdentity; status: "running" }
   | { agent: AgentIdentity; status: "completed" | "failed" | "stopped"; finalText: string; endedAt: string };
 
-export type Transcript = { lines: string[]; latest?: string; truncated?: boolean };
+export type TranscriptItem =
+  | { kind: "user" | "assistant"; text: string }
+  | { kind: "tool"; id: string; name: string; args: Record<string, unknown>; result?: { text: string; isError: boolean } };
+export type Transcript = { items: TranscriptItem[]; latest?: string; truncated?: boolean };
 
 const AGENT_ID = /^a[0-9a-f]{16}$/;
+const MESSAGE_LIMIT = 12000;
 
 const object = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
@@ -34,7 +38,7 @@ export function parseRecord(value: unknown): AgentRecord | undefined {
   if (
     (value.status === "completed" || value.status === "failed" || value.status === "stopped") &&
     typeof value.finalText === "string" && typeof value.endedAt === "string"
-  ) return { agent: identity, status: value.status, finalText: excerpt(value.finalText, 2000), endedAt: value.endedAt };
+  ) return { agent: identity, status: value.status, finalText: excerpt(value.finalText), endedAt: value.endedAt };
 }
 
 export function parseResultDetails(value: unknown): { status: AgentRecord["status"]; id: string } | undefined {
@@ -44,12 +48,17 @@ export function parseResultDetails(value: unknown): { status: AgentRecord["statu
 }
 
 export function clean(text: string): string {
-  return text.replace(/[\x00-\x1f\x7f-\x9f\u200b-\u200f\u202a-\u202e\u2060-\u206f\ufeff]/g, " ").replace(/\s+/g, " ").trim();
+  return safeText(text).replace(/\s+/g, " ").trim();
 }
 
-function excerpt(text: string, limit: number): string {
-  const safe = text.split(/\r?\n/).map(clean).join("\n");
-  return safe.length > limit ? `${safe.slice(0, limit)}\n[excerpt truncated]` : safe;
+export function safeText(text: string): string {
+  return text.replace(/\r\n?/g, "\n").replace(/\t/g, "    ")
+    .replace(/[\x00-\x09\x0b-\x1f\x7f-\x9f\u200b-\u200f\u202a-\u202e\u2060-\u206f\ufeff]/g, " ");
+}
+
+function excerpt(text: string): string {
+  const safe = safeText(text);
+  return safe.length > MESSAGE_LIMIT ? `${safe.slice(0, MESSAGE_LIMIT)}\n[excerpt truncated]` : safe;
 }
 
 function contentText(content: unknown): string {
@@ -61,32 +70,57 @@ function contentText(content: unknown): string {
     .join("\n");
 }
 
+function safeArgs(value: unknown): Record<string, unknown> {
+  if (!object(value)) return {};
+  const sanitize = (input: unknown): unknown => {
+    if (typeof input === "string") return excerpt(input);
+    if (Array.isArray(input)) return input.map(sanitize);
+    if (object(input)) return Object.fromEntries(Object.entries(input).map(([key, item]) => [safeText(key), sanitize(item)]));
+    return input;
+  };
+  return Object.fromEntries(Object.entries(value).map(([key, item]) => [safeText(key), sanitize(item)]));
+}
+
 export function parseTranscript(tail: string): Transcript {
-  const lines: string[] = [];
-  let latest: string | undefined;
+  const messages: Record<string, unknown>[] = [];
   for (const raw of tail.split("\n")) {
     let entry: unknown;
     try { entry = JSON.parse(raw); } catch { continue; }
-    if (!object(entry) || entry.type !== "message" || !object(entry.message)) continue;
-    const message = entry.message;
-    let label: string;
-    let text: string;
-    if (message.role === "assistant") {
-      label = "assistant";
-      const parts = Array.isArray(message.content) ? message.content : [];
-      const tool = parts.find((part): part is Record<string, unknown> => object(part) && part.type === "toolCall" && typeof part.name === "string");
-      text = tool ? `last tool: ${tool.name}` : contentText(parts);
-    } else if (message.role === "toolResult") {
-      label = "tool";
-      text = contentText(message.content);
-    } else if (message.role === "user") {
-      label = "user";
-      text = contentText(message.content);
-    } else continue;
-    text = excerpt(text, 1000);
-    if (!text.trim()) continue;
-    lines.push(`${label}  ${text}`);
-    if (label !== "user") latest = clean(text).slice(0, 160);
+    if (object(entry) && entry.type === "message" && object(entry.message)) messages.push(entry.message);
   }
-  return { lines: lines.slice(-40), latest };
+  const items: TranscriptItem[] = [];
+  const calls = new Map<string, Extract<TranscriptItem, { kind: "tool" }>>();
+  let latest: string | undefined;
+  for (const message of messages.slice(-40)) {
+    if (message.role === "assistant" && Array.isArray(message.content)) {
+      for (const part of message.content) {
+        if (!object(part)) continue;
+        if (part.type === "text" && typeof part.text === "string" && part.text.trim()) {
+          const text = excerpt(part.text);
+          items.push({ kind: "assistant", text });
+          latest = clean(text).slice(0, 160);
+        } else if (part.type === "toolCall" && typeof part.id === "string" && typeof part.name === "string") {
+          const tool: Extract<TranscriptItem, { kind: "tool" }> = {
+            kind: "tool", id: safeText(part.id), name: clean(part.name), args: safeArgs(part.arguments),
+          };
+          items.push(tool);
+          calls.set(part.id, tool);
+          latest = `tool: ${tool.name}`;
+        }
+      }
+    } else if (message.role === "user") {
+      const text = excerpt(contentText(message.content));
+      if (text.trim()) items.push({ kind: "user", text });
+    } else if (message.role === "toolResult") {
+      const text = excerpt(contentText(message.content));
+      const id = typeof message.toolCallId === "string" ? message.toolCallId : "";
+      const name = typeof message.toolName === "string" ? clean(message.toolName) : "tool result";
+      const result = { text, isError: message.isError === true };
+      const call = calls.get(id);
+      if (call) call.result = result;
+      else items.push({ kind: "tool", id: safeText(id), name, args: {}, result });
+      latest = clean(text).slice(0, 160) || `tool: ${name}`;
+    }
+  }
+  return { items, latest, truncated: messages.length > 40 };
 }

@@ -2,12 +2,17 @@ import { open, readdir } from "node:fs/promises";
 import { constants } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import {
+  AssistantMessageComponent, UserMessageComponent, ToolExecutionComponent, getMarkdownTheme,
+  createReadToolDefinition, createBashToolDefinition, createEditToolDefinition, createWriteToolDefinition,
+  createFindToolDefinition, createGrepToolDefinition, createLsToolDefinition,
+  type ExtensionAPI, type ExtensionContext,
+} from "@earendil-works/pi-coding-agent";
 import { Key, matchesKey, Text, truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
-import { clean, parseRecord, parseResultDetails, parseTranscript, type AgentRecord, type Transcript } from "./model.ts";
+import { clean, parseRecord, parseResultDetails, parseTranscript, type AgentRecord, type Transcript, type TranscriptItem } from "./model.ts";
 
 type Viewer = { kind: "opening" } | { kind: "open"; close: () => void };
-type Viewport = { kind: "follow" } | { kind: "paused"; excerpts: string[]; offset: number };
+type Viewport = { kind: "follow" } | { kind: "paused"; items: TranscriptItem[]; offset: number };
 
 const WIDGET = "pstack-panel";
 const TAIL_BYTES = 128 * 1024;
@@ -29,7 +34,8 @@ async function transcriptOf(record: AgentRecord, expectedDir: string): Promise<T
     const { bytesRead } = await file.read(bytes, 0, bytes.length, start);
     let text = bytes.subarray(0, bytesRead).toString("utf8");
     if (start > 0) text = text.slice(text.indexOf("\n") + 1);
-    return { ...parseTranscript(text), truncated: start > 0 };
+    const transcript = parseTranscript(text);
+    return { ...transcript, truncated: start > 0 || transcript.truncated };
   } catch { return; }
   finally { await file?.close().catch(() => {}); }
 }
@@ -39,7 +45,6 @@ export default function pstackPanel(pi: ExtensionAPI): void {
   let transcripts = new Map<string, Transcript>();
   let selected: string | undefined;
   let listOffset = 0;
-  let detail = false;
   let timer: ReturnType<typeof setInterval> | undefined;
   let session = 0;
   let refreshBusy = false;
@@ -110,7 +115,6 @@ export default function pstackPanel(pi: ExtensionAPI): void {
     records = new Map();
     transcripts = new Map();
     selected = undefined;
-    detail = false;
     listOffset = 0;
   }
 
@@ -134,12 +138,46 @@ export default function pstackPanel(pi: ExtensionAPI): void {
       if (session !== generation || viewer !== opening) return;
       await ctx.ui.custom<void>((tui, theme, keybindings, done) => {
       let closed = false;
+      let detail = false;
       let viewport: Viewport = { kind: "follow" };
-      let displayedExcerpts: string[] = [];
+      let displayedItems: TranscriptItem[] = [];
       let maxScroll = 0;
+      let markdownTheme = getMarkdownTheme();
+      const definitions = new Map([
+        createReadToolDefinition(ctx.cwd), createBashToolDefinition(ctx.cwd),
+        createEditToolDefinition(ctx.cwd), createWriteToolDefinition(ctx.cwd),
+        createFindToolDefinition(ctx.cwd), createGrepToolDefinition(ctx.cwd),
+        createLsToolDefinition(ctx.cwd),
+      ].map((definition) => [definition.name, definition] as const));
+      const components = new Map<string, { render(width: number): string[] }>();
+      const renderItem = (item: TranscriptItem, index: number, width: number): string[] => {
+        const key = `${index}:${JSON.stringify(item)}`;
+        let component = components.get(key);
+        if (!component) {
+          if (item.kind === "user") component = new UserMessageComponent(item.text, markdownTheme, 1);
+          else if (item.kind === "assistant") {
+            component = new AssistantMessageComponent({
+              role: "assistant", content: [{ type: "text", text: item.text }],
+              api: "", provider: "", model: "", timestamp: 0, stopReason: "stop",
+              usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0,
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+            }, true, markdownTheme, undefined, 1);
+          } else {
+            const tool = new ToolExecutionComponent(item.name, item.id, item.args,
+              { showImages: false, outputPad: 1 }, definitions.get(item.name), tui, ctx.cwd);
+            tool.updateResult({
+              content: [{ type: "text", text: item.result?.text ?? "Result not present in excerpt; tool state unknown." }],
+              isError: item.result?.isError ?? false,
+            });
+            component = tool;
+          }
+          components.set(key, component);
+        }
+        return component.render(width);
+      };
       const scrollBy = (delta: number) => {
         const offset = Math.min(maxScroll, Math.max(0, (viewport.kind === "paused" ? viewport.offset : 0) + delta));
-        viewport = offset ? { kind: "paused", excerpts: displayedExcerpts, offset } : { kind: "follow" };
+        viewport = offset ? { kind: "paused", items: displayedItems, offset } : { kind: "follow" };
       };
       const finish = () => {
         if (closed) return;
@@ -175,25 +213,34 @@ export default function pstackPanel(pi: ExtensionAPI): void {
             lines.push(theme.fg("text", `${current.agent.id}  ${label(current)}`));
             const tail = transcripts.get(current.agent.id);
             lines.push(theme.fg("dim", ` Recent transcript excerpt${tail?.truncated ? " (older lines omitted)" : ""}${viewport.kind === "paused" ? " · paused" : ""} · status from session records`), "");
-            const transcript = tail?.lines ?? [];
-            const live = transcript.length ? [...transcript] : ["Transcript not written yet."];
-            if (current.status !== "running") live.push(`final answer  ${current.finalText || "No output."}`);
-            displayedExcerpts = viewport.kind === "paused" ? viewport.excerpts : live;
-            const output = displayedExcerpts.flatMap((text) => text.split("\n").flatMap((line) => wrapTextWithAnsi(line, Math.max(1, width - 2))));
+            const live = [...(tail?.items ?? [])];
+            if (current.status !== "running" && current.finalText &&
+                !live.some((item) => item.kind === "assistant" && item.text.trim() === current.finalText.trim())) {
+              live.push({ kind: "assistant", text: current.finalText });
+            }
+            displayedItems = viewport.kind === "paused" ? viewport.items : live;
+            const output = displayedItems.length
+              ? displayedItems.flatMap((item, i) => renderItem(item, i, Math.max(1, width - 1)))
+              : [theme.fg("dim", "Transcript not written yet.")];
+            if (components.size > 160) components.clear();
             const page = Math.max(1, height - 5);
             maxScroll = Math.max(0, output.length - page);
             const offset = viewport.kind === "paused" ? Math.min(viewport.offset, maxScroll) : 0;
             if (viewport.kind === "paused") viewport = offset ? { ...viewport, offset } : { kind: "follow" };
             const end = output.length - offset;
-            for (const line of output.slice(Math.max(0, end - page), end)) lines.push(` ${theme.fg("muted", line)}`);
-            lines.push("", ...wrapTextWithAnsi(" ↑↓ scroll · u/d page · Tab agent · Backspace list · Esc close", width).map((line) => theme.fg("dim", line)));
+            for (const line of output.slice(Math.max(0, end - page), end)) lines.push(` ${line}`);
+            lines.push("", ...wrapTextWithAnsi(" ↑↓ scroll · u/d page · Tab agent · Backspace/Esc list", width).map((line) => theme.fg("dim", line)));
           }
           return lines.map((line) => truncateToWidth(line, width));
         },
         handleInput(data: string): void {
           const items = ordered();
           const index = Math.max(0, items.findIndex((r) => r.agent.id === selected));
-          if (keybindings.matches(data, "tui.select.cancel") || matchesKey(data, "escape")) { finish(); return; }
+          if (keybindings.matches(data, "tui.select.cancel") || matchesKey(data, "escape")) {
+            if (detail) { detail = false; viewport = { kind: "follow" }; tui.requestRender(); }
+            else finish();
+            return;
+          }
           if (detail && matchesKey(data, "backspace")) { detail = false; viewport = { kind: "follow" }; }
           else if (!detail && items.length && (keybindings.matches(data, "tui.select.confirm") || matchesKey(data, "return"))) { detail = true; viewport = { kind: "follow" }; }
           else if (detail && (matchesKey(data, "tab") || matchesKey(data, "right") || matchesKey(data, "left"))) {
@@ -213,7 +260,7 @@ export default function pstackPanel(pi: ExtensionAPI): void {
           void refresh(ctx);
           tui.requestRender();
         },
-        invalidate() {},
+        invalidate() { markdownTheme = getMarkdownTheme(); components.clear(); },
       };
       });
     } finally {
