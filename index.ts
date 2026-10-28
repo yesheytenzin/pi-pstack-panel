@@ -218,7 +218,9 @@ export default function pstackPanel(pi: ExtensionAPI): void {
           const current = items[index];
           if (viewedAgent !== selected) resetDetail();
           const height = tui.terminal.rows;
-          const contentHeight = Math.max(1, height - 7);
+          const detailHelp = wrapTextWithAnsi(" ↑↓ scroll · u/d page · o tools · Tab agent · Esc list", width)
+            .map((line) => theme.fg("dim", line));
+          const contentHeight = Math.max(1, height - 6 - detailHelp.length);
           const lines: string[] = [theme.fg("accent", ` Agents  ${items.length}  ${detail ? "transcript tail" : "list"}`), ""];
           if (!detail) {
             const page = Math.min(14, Math.max(1, Math.floor(contentHeight / 2)));
@@ -252,7 +254,7 @@ export default function pstackPanel(pi: ExtensionAPI): void {
             if (viewport.kind === "paused") viewport = offset ? { ...viewport, offset } : { kind: "follow" };
             const end = output.length - offset;
             for (const line of output.slice(Math.max(0, end - page), end)) lines.push(` ${line}`);
-            lines.push("", ...wrapTextWithAnsi(" ↑↓ scroll · u/d page · o tools · Tab agent · Esc list", width).map((line) => theme.fg("dim", line)));
+            lines.push("", ...detailHelp);
           }
           return lines.slice(0, height).map((line) => truncateToWidth(line, width, "", true))
             .concat(Array(Math.max(0, height - lines.length)).fill(" ".repeat(width)));
