@@ -143,6 +143,7 @@ export default function pstackPanel(pi: ExtensionAPI): void {
       let viewport: Viewport = { kind: "follow" };
       let displayedItems: TranscriptItem[] = [];
       let maxScroll = 0;
+      let viewedAgent: string | undefined;
       let markdownTheme = getMarkdownTheme();
       const definitions = new Map([
         createReadToolDefinition(ctx.cwd), createBashToolDefinition(ctx.cwd),
@@ -180,6 +181,18 @@ export default function pstackPanel(pi: ExtensionAPI): void {
         }
         return component.render(width);
       };
+      const resetDetail = () => {
+        viewport = { kind: "follow" };
+        displayedItems = [];
+        maxScroll = 0;
+        components.clear();
+        viewedAgent = selected;
+      };
+      const selectAgent = (id: string | undefined) => {
+        if (selected === id) return;
+        selected = id;
+        resetDetail();
+      };
       const scrollBy = (delta: number) => {
         const offset = Math.min(maxScroll, Math.max(0, (viewport.kind === "paused" ? viewport.offset : 0) + delta));
         viewport = offset ? { kind: "paused", items: displayedItems, offset } : { kind: "follow" };
@@ -194,16 +207,21 @@ export default function pstackPanel(pi: ExtensionAPI): void {
       };
       viewer = { kind: "open", close: finish };
       widget();
-      requestViewerRender = () => tui.requestRender();
+      requestViewerRender = () => {
+        if (viewedAgent !== selected) resetDetail();
+        tui.requestRender();
+      };
       return {
         render(width: number): string[] {
           const items = ordered();
           const index = Math.max(0, items.findIndex((r) => r.agent.id === selected));
           const current = items[index];
-          const height = Math.max(5, (process.stdout.rows || 24) - 7);
+          if (viewedAgent !== selected) resetDetail();
+          const height = tui.terminal.rows;
+          const contentHeight = Math.max(1, height - 7);
           const lines: string[] = [theme.fg("accent", ` Agents  ${items.length}  ${detail ? "transcript tail" : "list"}`), ""];
           if (!detail) {
-            const page = Math.min(14, Math.max(1, Math.floor(height / 2)));
+            const page = Math.min(14, Math.max(1, Math.floor(contentHeight / 2)));
             listOffset = Math.max(0, Math.min(listOffset, Math.max(0, items.length - page)));
             if (index < listOffset) listOffset = index;
             if (index >= listOffset + page) listOffset = index - page + 1;
@@ -228,7 +246,7 @@ export default function pstackPanel(pi: ExtensionAPI): void {
               ? displayedItems.flatMap((item, i) => renderItem(item, i, Math.max(1, width - 1)))
               : [theme.fg("dim", "Transcript not written yet.")];
             if (components.size > 160) components.clear();
-            const page = Math.max(1, height - 5);
+            const page = contentHeight;
             maxScroll = Math.max(0, output.length - page);
             const offset = viewport.kind === "paused" ? Math.min(viewport.offset, maxScroll) : 0;
             if (viewport.kind === "paused") viewport = offset ? { ...viewport, offset } : { kind: "follow" };
@@ -236,21 +254,21 @@ export default function pstackPanel(pi: ExtensionAPI): void {
             for (const line of output.slice(Math.max(0, end - page), end)) lines.push(` ${line}`);
             lines.push("", ...wrapTextWithAnsi(" ↑↓ scroll · u/d page · o tools · Tab agent · Esc list", width).map((line) => theme.fg("dim", line)));
           }
-          return lines.map((line) => truncateToWidth(line, width));
+          return lines.slice(0, height).map((line) => truncateToWidth(line, width, "", true))
+            .concat(Array(Math.max(0, height - lines.length)).fill(" ".repeat(width)));
         },
         handleInput(data: string): void {
           const items = ordered();
           const index = Math.max(0, items.findIndex((r) => r.agent.id === selected));
           if (keybindings.matches(data, "tui.select.cancel") || matchesKey(data, "escape")) {
-            if (detail) { detail = false; viewport = { kind: "follow" }; tui.requestRender(); }
+            if (detail) { detail = false; resetDetail(); tui.requestRender(); }
             else finish();
             return;
           }
-          if (detail && matchesKey(data, "backspace")) { detail = false; viewport = { kind: "follow" }; }
-          else if (!detail && items.length && (keybindings.matches(data, "tui.select.confirm") || matchesKey(data, "return"))) { detail = true; viewport = { kind: "follow" }; }
+          if (detail && matchesKey(data, "backspace")) { detail = false; resetDetail(); }
+          else if (!detail && items.length && (keybindings.matches(data, "tui.select.confirm") || matchesKey(data, "return"))) { detail = true; resetDetail(); }
           else if (detail && (matchesKey(data, "tab") || matchesKey(data, "right") || matchesKey(data, "left"))) {
-            selected = items[(index + (matchesKey(data, "left") ? items.length - 1 : 1)) % items.length]?.agent.id;
-            viewport = { kind: "follow" };
+            selectAgent(items[(index + (matchesKey(data, "left") ? items.length - 1 : 1)) % items.length]?.agent.id);
           } else if (detail) {
             if (matchesKey(data, "o")) { expandedTools = !expandedTools; components.clear(); }
             else if (matchesKey(data, "up")) scrollBy(1);
@@ -259,8 +277,8 @@ export default function pstackPanel(pi: ExtensionAPI): void {
             else if (matchesKey(data, "pagedown") || matchesKey(data, "d")) scrollBy(-10);
             else return;
           } else {
-            if (matchesKey(data, "up")) selected = items[Math.max(0, index - 1)]?.agent.id;
-            else if (matchesKey(data, "down")) selected = items[Math.min(items.length - 1, index + 1)]?.agent.id;
+            if (matchesKey(data, "up")) selectAgent(items[Math.max(0, index - 1)]?.agent.id);
+            else if (matchesKey(data, "down")) selectAgent(items[Math.min(items.length - 1, index + 1)]?.agent.id);
             else return;
           }
           void refresh(ctx);
@@ -268,7 +286,7 @@ export default function pstackPanel(pi: ExtensionAPI): void {
         },
         invalidate() { markdownTheme = getMarkdownTheme(); components.clear(); },
       };
-      });
+      }, { overlay: true, overlayOptions: { anchor: "top-left", width: "100%", maxHeight: "100%", margin: 0 } });
     } finally {
       if (viewer === opening) { viewer = undefined; widget(); }
     }

@@ -24,13 +24,13 @@ If you already use a manually copied `pstack-panel` directory under `~/.pi/agent
 
 ## Behavior
 
-This extension reads p-stack's persisted `pstack-agents` session records. It does not start, stop, or message agents. The strip above the editor shows up to four agents, with running agents first and recent ended agents next. Pi's existing footer remains unchanged.
+This extension reads p-stack's persisted `pstack-agents` session records. It does not start, stop, or message agents. The strip above the editor shows up to four agents, with running agents first and recent ended agents next. `/agents` covers the terminal with an exclusive agent list or the selected agent's conversation; the parent chat and other agents are hidden until the viewer closes. Pi's existing footer remains unchanged underneath and returns when the viewer closes.
 
 ## Controls
 
 - `/agents` or `Ctrl+Alt+A` opens the viewer, including while the parent model is streaming.
 - In the list, use Up and Down to select an agent, then Enter to open its transcript excerpt.
-- In detail, use Up and Down to scroll, or `u` and `d` to move ten lines. Pi may reserve Page Up and Page Down for the main conversation. Use Tab, Left, or Right to switch agents. Backspace returns to the list.
+- In detail, use Up and Down to scroll, or `u` and `d` to move ten lines. Use Tab, Left, or Right to switch agents; switching starts at that agent's latest excerpt without retaining the previous agent's paused view. Backspace returns to the list.
 - Press `o` in detail to expand or collapse tool output.
 - Scrolling up pauses the excerpt so incoming output does not move what you are reading. Scroll down to the bottom to resume following new output.
 - Escape or Backspace in detail returns to the list. Escape in the list closes the viewer. Each open starts in the list, even if you previously read a transcript. Closing never stops an agent.
