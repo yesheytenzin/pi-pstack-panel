@@ -139,6 +139,7 @@ export default function pstackPanel(pi: ExtensionAPI): void {
       await ctx.ui.custom<void>((tui, theme, keybindings, done) => {
       let closed = false;
       let detail = false;
+      let expandedTools = false;
       let viewport: Viewport = { kind: "follow" };
       let displayedItems: TranscriptItem[] = [];
       let maxScroll = 0;
@@ -163,12 +164,16 @@ export default function pstackPanel(pi: ExtensionAPI): void {
                 cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
             }, true, markdownTheme, undefined, 1);
           } else {
+            const definition = item.name === "edit" && !item.result?.diff && !item.result?.isError
+              ? undefined : definitions.get(item.name);
             const tool = new ToolExecutionComponent(item.name, item.id, item.args,
-              { showImages: false, outputPad: 1 }, definitions.get(item.name), tui, ctx.cwd);
+              { showImages: false, outputPad: 1 }, definition, tui, ctx.cwd);
             tool.updateResult({
               content: [{ type: "text", text: item.result?.text ?? "Result not present in excerpt; tool state unknown." }],
               isError: item.result?.isError ?? false,
+              details: item.result?.diff === undefined ? undefined : { diff: item.result.diff },
             });
+            tool.setExpanded(expandedTools);
             component = tool;
           }
           components.set(key, component);
@@ -215,7 +220,7 @@ export default function pstackPanel(pi: ExtensionAPI): void {
             lines.push(theme.fg("dim", ` Recent transcript excerpt${tail?.truncated ? " (older lines omitted)" : ""}${viewport.kind === "paused" ? " · paused" : ""} · status from session records`), "");
             const live = [...(tail?.items ?? [])];
             if (current.status !== "running" && current.finalText &&
-                !live.some((item) => item.kind === "assistant" && item.text.trim() === current.finalText.trim())) {
+                tail?.lastAssistantText?.trim() !== current.finalText.trim()) {
               live.push({ kind: "assistant", text: current.finalText });
             }
             displayedItems = viewport.kind === "paused" ? viewport.items : live;
@@ -229,7 +234,7 @@ export default function pstackPanel(pi: ExtensionAPI): void {
             if (viewport.kind === "paused") viewport = offset ? { ...viewport, offset } : { kind: "follow" };
             const end = output.length - offset;
             for (const line of output.slice(Math.max(0, end - page), end)) lines.push(` ${line}`);
-            lines.push("", ...wrapTextWithAnsi(" ↑↓ scroll · u/d page · Tab agent · Backspace/Esc list", width).map((line) => theme.fg("dim", line)));
+            lines.push("", ...wrapTextWithAnsi(" ↑↓ scroll · u/d page · o tools · Tab agent · Esc list", width).map((line) => theme.fg("dim", line)));
           }
           return lines.map((line) => truncateToWidth(line, width));
         },
@@ -247,7 +252,8 @@ export default function pstackPanel(pi: ExtensionAPI): void {
             selected = items[(index + (matchesKey(data, "left") ? items.length - 1 : 1)) % items.length]?.agent.id;
             viewport = { kind: "follow" };
           } else if (detail) {
-            if (matchesKey(data, "up")) scrollBy(1);
+            if (matchesKey(data, "o")) { expandedTools = !expandedTools; components.clear(); }
+            else if (matchesKey(data, "up")) scrollBy(1);
             else if (matchesKey(data, "down")) scrollBy(-1);
             else if (matchesKey(data, "pageup") || matchesKey(data, "u")) scrollBy(10);
             else if (matchesKey(data, "pagedown") || matchesKey(data, "d")) scrollBy(-10);

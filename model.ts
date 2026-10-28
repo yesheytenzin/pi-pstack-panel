@@ -12,8 +12,8 @@ export type AgentRecord =
 
 export type TranscriptItem =
   | { kind: "user" | "assistant"; text: string }
-  | { kind: "tool"; id: string; name: string; args: Record<string, unknown>; result?: { text: string; isError: boolean } };
-export type Transcript = { items: TranscriptItem[]; latest?: string; truncated?: boolean };
+  | { kind: "tool"; id: string; name: string; args: Record<string, unknown>; result?: { text: string; isError: boolean; diff?: string } };
+export type Transcript = { items: TranscriptItem[]; latest?: string; lastAssistantText?: string; truncated?: boolean };
 
 const AGENT_ID = /^a[0-9a-f]{16}$/;
 const MESSAGE_LIMIT = 12000;
@@ -91,8 +91,10 @@ export function parseTranscript(tail: string): Transcript {
   const items: TranscriptItem[] = [];
   const calls = new Map<string, Extract<TranscriptItem, { kind: "tool" }>>();
   let latest: string | undefined;
+  let lastAssistantText: string | undefined;
   for (const message of messages.slice(-40)) {
     if (message.role === "assistant" && Array.isArray(message.content)) {
+      lastAssistantText = excerpt(contentText(message.content));
       for (const part of message.content) {
         if (!object(part)) continue;
         if (part.type === "text" && typeof part.text === "string" && part.text.trim()) {
@@ -115,12 +117,13 @@ export function parseTranscript(tail: string): Transcript {
       const text = excerpt(contentText(message.content));
       const id = typeof message.toolCallId === "string" ? message.toolCallId : "";
       const name = typeof message.toolName === "string" ? clean(message.toolName) : "tool result";
-      const result = { text, isError: message.isError === true };
+      const diff = object(message.details) && typeof message.details.diff === "string" ? excerpt(message.details.diff) : undefined;
+      const result = { text, isError: message.isError === true, ...(diff === undefined ? {} : { diff }) };
       const call = calls.get(id);
       if (call) call.result = result;
       else items.push({ kind: "tool", id: safeText(id), name, args: {}, result });
       latest = clean(text).slice(0, 160) || `tool: ${name}`;
     }
   }
-  return { items, latest, truncated: messages.length > 40 };
+  return { items, latest, lastAssistantText, truncated: messages.length > 40 };
 }

@@ -40,6 +40,7 @@ assert.equal(transcript.items[2]?.kind === "tool" && transcript.items[2].result?
 assert.equal(transcript.items[4]?.kind === "tool" && transcript.items[4].result?.text, "pwd output");
 assert.equal(transcript.items[5]?.kind === "assistant" && transcript.items[5].text, "After calls");
 assert.equal(transcript.latest, "file output");
+assert.equal(transcript.lastAssistantText, "Intro\n```ts\n    const x = 1;\n```\n ]0;hijack \nBetween calls\nAfter calls");
 assert.ok(!JSON.stringify(transcript).includes("secret"));
 assert.ok(!JSON.stringify(transcript).includes("\u001b"));
 const orphan = parseTranscript(json({ role: "toolResult", toolCallId: "old", toolName: "read", content: [{ type: "text", text: "older result" }], isError: false }));
@@ -52,4 +53,13 @@ assert.ok(long.items[0]?.kind === "assistant" && long.items[0].text.endsWith("[e
 assert.ok(parseRecord({ agent, status: "completed", endedAt: "now", finalText: "x".repeat(13000) })?.status === "completed");
 assert.equal(safeText("```\n  a\t= 1\n```"), "```\n  a    = 1\n```");
 assert.equal(clean("x\u001b[31my\u001b[0m"), "x [31my [0m");
+const multiBlock = parseTranscript(json({ role: "assistant", content: [
+  { type: "text", text: "First paragraph." }, { type: "text", text: "Second paragraph." },
+] }));
+assert.equal(multiBlock.lastAssistantText, "First paragraph.\nSecond paragraph.");
+const edit = parseTranscript([
+  json({ role: "assistant", content: [{ type: "toolCall", id: "edit1", name: "edit", arguments: { path: "/tmp/a", oldText: "old", newText: "new" } }] }),
+  json({ role: "toolResult", toolCallId: "edit1", toolName: "edit", content: [{ type: "text", text: "Successfully replaced text." }], details: { diff: "-1 old\n+1 new\u001b[0m" }, isError: false }),
+].join("\n"));
+assert.equal(edit.items[0]?.kind === "tool" && edit.items[0].result?.diff, "-1 old\n+1 new [0m");
 console.log("pstack-panel self-check passed");
