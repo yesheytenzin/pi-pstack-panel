@@ -1,6 +1,6 @@
 {
   "name": "pi-pstack-panel",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "An in-terminal agent viewer for p-stack in Pi",
   "type": "module",
   "keywords": ["pi-package", "pstack", "subagents"],

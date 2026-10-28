@@ -8,7 +8,7 @@ import {
   createFindToolDefinition, createGrepToolDefinition, createLsToolDefinition,
   type ExtensionAPI, type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
-import { Key, matchesKey, Text, truncateToWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import { Key, matchesKey, Text, truncateToWidth, wrapTextWithAnsi, type TuiMouseEvent, type TuiMouseEventResult } from "@earendil-works/pi-tui";
 import { clean, parseRecord, parseResultDetails, parseTranscript, type AgentRecord, type Transcript, type TranscriptItem } from "./model.ts";
 
 type Viewer = { kind: "opening" } | { kind: "open"; close: () => void };
@@ -253,11 +253,27 @@ export default function pstackPanel(pi: ExtensionAPI): void {
             const offset = viewport.kind === "paused" ? Math.min(viewport.offset, maxScroll) : 0;
             if (viewport.kind === "paused") viewport = offset ? { ...viewport, offset } : { kind: "follow" };
             const end = output.length - offset;
-            for (const line of output.slice(Math.max(0, end - page), end)) lines.push(` ${line}`);
-            lines.push("", ...detailHelp);
+            const start = Math.max(0, end - page);
+            for (const line of output.slice(start, end)) lines.push(` ${line}`);
+            const position = maxScroll
+              ? ` Rows ${start + 1}-${end}/${output.length}${viewport.kind === "paused" ? " · paused" : ""}`
+              : " Fits view · o expands tools";
+            lines.push(theme.fg("dim", position), ...detailHelp);
           }
           return lines.slice(0, height).map((line) => truncateToWidth(line, width, "", true))
             .concat(Array(Math.max(0, height - lines.length)).fill(" ".repeat(width)));
+        },
+        handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
+          if (event.type !== "wheel" || !event.wheelDelta) return;
+          if (detail) scrollBy(-event.wheelDelta);
+          else {
+            const items = ordered();
+            const index = Math.max(0, items.findIndex((r) => r.agent.id === selected));
+            selectAgent(items[Math.max(0, Math.min(items.length - 1, index + Math.sign(event.wheelDelta)))]?.agent.id);
+          }
+          void refresh(ctx);
+          tui.requestRender();
+          return { handled: true };
         },
         handleInput(data: string): void {
           const items = ordered();
