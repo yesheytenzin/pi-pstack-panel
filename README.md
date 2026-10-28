@@ -24,7 +24,9 @@ If you already use a manually copied `pstack-panel` directory under `~/.pi/agent
 
 ## Behavior
 
-This extension reads p-stack's persisted `pstack-agents` session records. It does not start, stop, or message agents. The strip above the editor shows up to four agents, with running agents first and recent ended agents next. `/agents` covers the terminal with an exclusive agent list or the selected agent's conversation; the parent chat and other agents are hidden until the viewer closes. Pi's existing footer remains unchanged underneath and returns when the viewer closes.
+This extension reads p-stack's persisted `pstack-agents` session records. It does not start, stop, or message agents. The strip above the editor shows up to four agents, with running agents first and recent ended agents next. `/agents` covers the terminal with the agent list or the selected agent's text conversation. Parent conversation text and other agents' text stay hidden until the viewer closes. Pi's existing footer remains unchanged underneath and returns when the viewer closes.
+
+Pi 1.4.0 does not composite overlays over image-bearing terminal rows. Parent inline images may remain visible while the viewer is open. This host limitation is separate from the viewer's decision not to replay agent images.
 
 ## Controls
 
